@@ -164,15 +164,21 @@ struct PermissionStepView: View {
 
             if hasPermission {
                 Button(action: onRestart) {
-                    Label("Khởi động lại", systemImage: "arrow.clockwise")
-                        .frame(width: 160)
+                    HStack(spacing: 6) {
+                        Text("Khởi động lại")
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .frame(width: 160)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
             } else {
                 Button(action: openSettings) {
-                    Label("Mở Cài đặt", systemImage: "gear")
-                        .frame(width: 140)
+                    HStack(spacing: 6) {
+                        Text("Mở Cài đặt")
+                        Image(systemName: "arrow.up.forward")
+                    }
+                    .frame(width: 140)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
