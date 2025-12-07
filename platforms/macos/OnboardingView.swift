@@ -136,52 +136,49 @@ struct PermissionStepView: View {
         VStack(spacing: 20) {
             Spacer()
 
-            Image(systemName: hasPermission ? "checkmark.shield.fill" : "lock.shield.fill")
+            Image(systemName: "lock.shield.fill")
                 .font(.system(size: 50))
-                .foregroundColor(hasPermission ? .green : .accentColor)
+                .foregroundColor(.accentColor)
 
-            Text(hasPermission ? "Đã cấp quyền!" : "Cấp quyền Accessibility")
+            Text("Cấp quyền Accessibility")
                 .font(.system(size: 24, weight: .bold))
 
-            Text(hasPermission
-                 ? "Nhấn nút bên dưới để khởi động lại và bắt đầu sử dụng."
-                 : "GoNhanh cần quyền Accessibility để gõ tiếng Việt.")
+            Text("GoNhanh cần quyền Accessibility để gõ tiếng Việt.")
                 .font(.body)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 380)
 
-            if !hasPermission {
-                VStack(alignment: .leading, spacing: 10) {
-                    StepRowView(number: 1, text: "Nhấn \"Mở Cài đặt\"", done: didOpenSettings)
-                    StepRowView(number: 2, text: "Bật GoNhanh trong danh sách", done: hasPermission)
-                    StepRowView(number: 3, text: "Nhấn \"Khởi động lại\"", done: false)
-                }
-                .padding(.top, 8)
+            VStack(alignment: .leading, spacing: 10) {
+                StepRowView(number: 1, text: "Nhấn \"Mở Cài đặt\"", done: didOpenSettings)
+                StepRowView(number: 2, text: "Bật GoNhanh trong danh sách", done: hasPermission)
+                StepRowView(number: 3, text: "Nhấn \"Khởi động lại\"", done: false)
             }
+            .padding(.top, 8)
 
             Spacer()
 
-            if hasPermission {
-                Button(action: onRestart) {
-                    HStack(spacing: 6) {
-                        Text("Khởi động lại")
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .frame(width: 160)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-            } else {
+            HStack(spacing: 12) {
                 Button(action: openSettings) {
                     HStack(spacing: 6) {
                         Text("Mở Cài đặt")
                         Image(systemName: "arrow.up.forward")
                     }
-                    .frame(width: 140)
+                    .frame(width: 130)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button(action: onRestart) {
+                    HStack(spacing: 6) {
+                        Text("Khởi động lại")
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .frame(width: 150)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .disabled(!hasPermission)
             }
 
             Spacer().frame(height: 30)
