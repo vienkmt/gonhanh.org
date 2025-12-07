@@ -10,21 +10,31 @@ struct OnboardingView: View {
     @State private var selectedMode: InputMode = .telex
     @State private var permissionTimer: Timer?
 
-    // 2 screens if has permission, 3 screens if not
-    private var totalPages: Int { hasPermission && currentPage == 0 ? 2 : 3 }
+    // Check if user already went through permission flow (opened settings before restart)
+    private var isPostRestart: Bool {
+        UserDefaults.standard.bool(forKey: SettingsKey.permissionGranted)
+    }
+
+    // Show success flow if: has permission AND is after restart
+    private var showSuccessFlow: Bool {
+        hasPermission && isPostRestart
+    }
+
+    private var totalPages: Int { showSuccessFlow ? 2 : 3 }
 
     var body: some View {
         VStack(spacing: 0) {
             // Content area
             Group {
-                if hasPermission && currentPage == 0 {
-                    // Already has permission - show success
-                    PermissionSuccessPage()
-                } else if hasPermission && currentPage == 1 {
-                    // Setup page
-                    SetupPage(selectedMode: $selectedMode)
+                if showSuccessFlow {
+                    // Post-restart flow: Success -> Setup
+                    if currentPage == 0 {
+                        PermissionSuccessPage()
+                    } else {
+                        SetupPage(selectedMode: $selectedMode)
+                    }
                 } else {
-                    // Normal flow without permission
+                    // Normal flow: Welcome -> Permission -> Setup
                     switch currentPage {
                     case 0:
                         WelcomePage()
@@ -75,22 +85,23 @@ struct OnboardingView: View {
 
     @ViewBuilder
     private var primaryButton: some View {
-        if hasPermission && currentPage == 0 {
-            // Success page -> go to setup
-            Button("Tiếp tục") {
-                currentPage = 1
+        if showSuccessFlow {
+            // Post-restart flow
+            if currentPage == 0 {
+                Button("Tiếp tục") {
+                    currentPage = 1
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            } else {
+                Button("Hoàn tất") {
+                    finishOnboarding()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
             }
-            .keyboardShortcut(.defaultAction)
-            .buttonStyle(.borderedProminent)
-        } else if hasPermission && currentPage == 1 {
-            // Setup page -> finish
-            Button("Hoàn tất") {
-                finishOnboarding()
-            }
-            .keyboardShortcut(.defaultAction)
-            .buttonStyle(.borderedProminent)
         } else {
-            // Normal flow without permission
+            // Normal flow
             switch currentPage {
             case 0:
                 Button("Tiếp tục") {
@@ -100,11 +111,19 @@ struct OnboardingView: View {
                 .buttonStyle(.borderedProminent)
 
             case 1:
-                Button("Mở System Settings") {
-                    openAccessibilitySettings()
+                if hasPermission {
+                    Button("Khởi động lại") {
+                        restartApp()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Mở System Settings") {
+                        openAccessibilitySettings()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
                 }
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
 
             case 2:
                 Button("Hoàn tất") {
