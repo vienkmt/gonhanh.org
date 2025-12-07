@@ -7,6 +7,7 @@ class MenuBarController {
     private var statusItem: NSStatusItem!
     private var onboardingWindow: NSWindow?
     private var aboutWindow: NSWindow?
+    private var toggleSwitch: NSSwitch?
 
     private var isEnabled = true
     private var currentMethod: InputMode = .telex
@@ -149,15 +150,18 @@ class MenuBarController {
         name.frame = NSRect(x: 14, y: 10, width: 120, height: 16)
         view.addSubview(name)
 
-        // Toggle switch
-        let toggle = NSSwitch()
-        toggle.state = isEnabled ? .on : .off
-        toggle.controlSize = .regular
-        toggle.target = self
-        toggle.action = #selector(toggleEnabled)
-        toggle.sizeToFit()
-        toggle.frame.origin = NSPoint(x: 170, y: 6)
-        view.addSubview(toggle)
+        // Toggle switch (reuse existing)
+        if toggleSwitch == nil {
+            let toggle = NSSwitch()
+            toggle.controlSize = .regular
+            toggle.target = self
+            toggle.action = #selector(toggleEnabled)
+            toggle.sizeToFit()
+            toggleSwitch = toggle
+        }
+        toggleSwitch?.state = isEnabled ? .on : .off
+        toggleSwitch?.frame.origin = NSPoint(x: 170, y: 6)
+        view.addSubview(toggleSwitch!)
 
         return view
     }
