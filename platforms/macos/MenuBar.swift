@@ -225,7 +225,7 @@ class MenuBarController {
             onboardingWindow = NSWindow(contentViewController: controller)
             onboardingWindow?.title = "Chào mừng đến với \(AppMetadata.name)"
             onboardingWindow?.styleMask = [.titled, .closable]
-            onboardingWindow?.setContentSize(NSSize(width: 500, height: 420))
+            onboardingWindow?.setContentSize(NSSize(width: 520, height: 480))
             onboardingWindow?.center()
         }
         onboardingWindow?.makeKeyAndOrderFront(nil)
