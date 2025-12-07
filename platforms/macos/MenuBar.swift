@@ -23,14 +23,20 @@ class MenuBarController {
 
         let hasOnboarded = UserDefaults.standard.bool(forKey: SettingsKey.hasCompletedOnboarding)
         let hasPermission = AXIsProcessTrusted()
+        let needsPostRestartFlow = UserDefaults.standard.bool(forKey: SettingsKey.permissionGranted)
+
+        setupUI()
 
         if hasOnboarded && hasPermission {
+            // Đã hoàn tất onboarding và có quyền -> chạy bình thường
             loadSettings()
-            setupUI()
             startEngine()
         } else {
-            setupUI()
-            showOnboarding()
+            // Chưa hoàn tất onboarding -> hiện onboarding
+            // Delay một chút để đảm bảo app đã khởi động xong
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.showOnboarding()
+            }
         }
     }
 
