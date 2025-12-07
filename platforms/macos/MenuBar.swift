@@ -57,9 +57,43 @@ class MenuBarController {
 
     private func updateStatusButton() {
         guard let button = statusItem.button else { return }
-        button.title = isEnabled ? "V" : "E"
-        button.font = .systemFont(ofSize: 14, weight: .semibold)
-        button.contentTintColor = isEnabled ? .controlAccentColor : .secondaryLabelColor
+        button.title = ""
+        button.image = createStatusIcon(text: isEnabled ? "V" : "E")
+    }
+
+    private func createStatusIcon(text: String) -> NSImage {
+        let size: CGFloat = 18
+        let image = NSImage(size: NSSize(width: size, height: size))
+
+        image.lockFocus()
+
+        // Background trắng bo góc
+        let rect = NSRect(x: 0, y: 0, width: size, height: size)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
+        NSColor.white.setFill()
+        path.fill()
+
+        // Text transparent (dùng .clear với blend mode)
+        let font = NSFont.systemFont(ofSize: 13, weight: .bold)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.black
+        ]
+        let textSize = text.size(withAttributes: attrs)
+        let textRect = NSRect(
+            x: (size - textSize.width) / 2,
+            y: (size - textSize.height) / 2,
+            width: textSize.width,
+            height: textSize.height
+        )
+
+        // Vẽ text với blend mode để tạo transparent
+        NSGraphicsContext.current?.compositingOperation = .destinationOut
+        text.draw(in: textRect, withAttributes: attrs)
+
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
     }
 
     // MARK: - Menu
