@@ -36,6 +36,7 @@ class MenuBarController {
 
     private var isEnabled = true
     private var currentMethod: InputMode = .telex
+    private var isModernTone = true
 
     init() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -44,6 +45,13 @@ class MenuBarController {
             self,
             selector: #selector(onboardingDidComplete),
             name: .onboardingCompleted,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleToggleVietnamese),
+            name: .toggleVietnamese,
             object: nil
         )
 
@@ -58,11 +66,20 @@ class MenuBarController {
         }
     }
 
+    @objc private func handleToggleVietnamese() {
+        isEnabled.toggle()
+        UserDefaults.standard.set(isEnabled, forKey: SettingsKey.enabled)
+        RustBridge.setEnabled(isEnabled)
+        updateStatusButton()
+        updateMenu()
+    }
+
     // MARK: - Setup
 
     private func loadSettings() {
         isEnabled = UserDefaults.standard.object(forKey: SettingsKey.enabled) as? Bool ?? true
         currentMethod = InputMode(rawValue: UserDefaults.standard.integer(forKey: SettingsKey.method)) ?? .telex
+        isModernTone = UserDefaults.standard.object(forKey: SettingsKey.modernTone) as? Bool ?? true
     }
 
     private func startEngine() {
@@ -70,6 +87,12 @@ class MenuBarController {
         KeyboardHookManager.shared.start()
         RustBridge.setEnabled(isEnabled)
         RustBridge.setMethod(currentMethod.rawValue)
+        RustBridge.setModern(isModernTone)
+
+        // Check for updates in background after a short delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            UpdateManager.shared.checkForUpdatesSilently()
+        }
     }
 
     @objc private func onboardingDidComplete() {
@@ -77,6 +100,7 @@ class MenuBarController {
         updateStatusButton()
         updateMenu()
         startEngine()
+        enableLaunchAtLogin()
     }
 
     // MARK: - Status Button
@@ -134,7 +158,7 @@ class MenuBarController {
         menu.addItem(header)
         menu.addItem(.separator())
 
-        // Methods
+        // Input methods
         let telex = NSMenuItem(title: "Telex", action: #selector(selectTelex), keyEquivalent: "1")
         telex.keyEquivalentModifierMask = .command
         telex.target = self
@@ -148,10 +172,27 @@ class MenuBarController {
         menu.addItem(vni)
         menu.addItem(.separator())
 
+        // Tone style
+        let modernTone = NSMenuItem(title: "Kiểu mới (hoà)", action: #selector(selectModernTone), keyEquivalent: "")
+        modernTone.target = self
+        modernTone.tag = 20
+        menu.addItem(modernTone)
+
+        let classicTone = NSMenuItem(title: "Kiểu cũ (hòa)", action: #selector(selectClassicTone), keyEquivalent: "")
+        classicTone.target = self
+        classicTone.tag = 21
+        menu.addItem(classicTone)
+        menu.addItem(.separator())
+
         // About & Help
         let about = NSMenuItem(title: "Giới thiệu \(AppMetadata.name)", action: #selector(showAbout), keyEquivalent: "")
         about.target = self
         menu.addItem(about)
+
+        let checkUpdate = NSMenuItem(title: "Kiểm tra cập nhật...", action: #selector(checkForUpdates), keyEquivalent: "u")
+        checkUpdate.keyEquivalentModifierMask = .command
+        checkUpdate.target = self
+        menu.addItem(checkUpdate)
 
         let help = NSMenuItem(title: "Góp ý & Báo lỗi", action: #selector(openHelp), keyEquivalent: "")
         help.target = self
@@ -194,6 +235,8 @@ class MenuBarController {
         menu.item(withTag: 1)?.view = createHeaderView()
         menu.item(withTag: 10)?.state = currentMethod == .telex ? .on : .off
         menu.item(withTag: 11)?.state = currentMethod == .vni ? .on : .off
+        menu.item(withTag: 20)?.state = isModernTone ? .on : .off
+        menu.item(withTag: 21)?.state = isModernTone ? .off : .on
     }
 
     // MARK: - Actions
@@ -218,6 +261,24 @@ class MenuBarController {
         RustBridge.setMethod(mode.rawValue)
         updateStatusButton()
         updateMenu()
+    }
+
+    @objc private func selectModernTone() { setToneStyle(modern: true) }
+    @objc private func selectClassicTone() { setToneStyle(modern: false) }
+
+    private func setToneStyle(modern: Bool) {
+        isModernTone = modern
+        UserDefaults.standard.set(modern, forKey: SettingsKey.modernTone)
+        RustBridge.setModern(modern)
+        updateMenu()
+    }
+
+    private func enableLaunchAtLogin() {
+        do {
+            try LaunchAtLoginManager.shared.enable()
+        } catch {
+            debugLog("[LaunchAtLogin] Error: \(error)")
+        }
     }
 
     private func showOnboarding() {
@@ -251,5 +312,9 @@ class MenuBarController {
 
     @objc private func openHelp() {
         NSWorkspace.shared.open(URL(string: AppMetadata.issuesURL)!)
+    }
+
+    @objc private func checkForUpdates() {
+        UpdateManager.shared.checkForUpdatesManually()
     }
 }
