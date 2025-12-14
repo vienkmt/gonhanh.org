@@ -98,13 +98,7 @@ class UpdateManager: NSObject, ObservableObject {
     }
 
     private func showUpdateNotification(_ info: UpdateInfo) {
-        let notification = NSUserNotification()
-        notification.title = "GoNhanh - Có phiên bản mới"
-        notification.informativeText = "Phiên bản \(info.version) đã sẵn sàng."
-        notification.soundName = NSUserNotificationDefaultSoundName
-        notification.hasActionButton = true
-        notification.actionButtonTitle = "Xem"
-        NSUserNotificationCenter.default.deliver(notification)
+        NotificationCenter.default.post(name: .showUpdateWindow, object: nil)
     }
 
     // MARK: - Install
