@@ -355,7 +355,11 @@ struct UpdateBadgeView: View {
         .onTapGesture {
             guard !status.isChecking else { return }
             if status.isAvailable {
-                NotificationCenter.default.post(name: .showUpdateWindow, object: nil)
+                // Show update window AND start download immediately
+                if case .available(let info) = UpdateManager.shared.state {
+                    UpdateManager.shared.downloadUpdate(info)
+                    NotificationCenter.default.post(name: .showUpdateWindow, object: nil)
+                }
             } else {
                 onCheck()
             }

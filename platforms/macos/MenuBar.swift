@@ -18,6 +18,7 @@ class MenuBarController: NSObject, NSWindowDelegate {
     private var settingsWindow: NSWindow?
 
     private let appState = AppState.shared
+    private var updateStateObserver: NSObjectProtocol?
 
     override init() {
         super.init()
@@ -31,6 +32,12 @@ class MenuBarController: NSObject, NSWindowDelegate {
             startEngine()
         } else {
             showOnboarding()
+        }
+    }
+
+    deinit {
+        if let observer = updateStateObserver {
+            NotificationCenter.default.removeObserver(observer)
         }
     }
 
@@ -71,6 +78,15 @@ class MenuBarController: NSObject, NSWindowDelegate {
             name: .showSettingsPage,
             object: nil
         )
+
+        // Observe UpdateManager state changes to update menu
+        updateStateObserver = NotificationCenter.default.addObserver(
+            forName: .updateStateChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateMenu()
+        }
     }
 
     @objc private func handleShowSettingsPage() {
@@ -109,10 +125,11 @@ class MenuBarController: NSObject, NSWindowDelegate {
         about.target = self
         menu.addItem(about)
 
-        // Check for updates
-        let checkUpdate = NSMenuItem(title: "Kiểm tra cập nhật", action: #selector(checkForUpdates), keyEquivalent: "")
-        checkUpdate.target = self
-        menu.addItem(checkUpdate)
+        // Update menu item (dynamic based on state)
+        let updateItem = NSMenuItem(title: "", action: #selector(handleUpdateAction), keyEquivalent: "")
+        updateItem.target = self
+        updateItem.tag = 20
+        menu.addItem(updateItem)
         menu.addItem(.separator())
 
         // Quit
@@ -168,10 +185,54 @@ class MenuBarController: NSObject, NSWindowDelegate {
         menu.item(withTag: 1)?.view = createHeaderView()
         menu.item(withTag: 10)?.state = appState.currentMethod == .telex ? .on : .off
         menu.item(withTag: 11)?.state = appState.currentMethod == .vni ? .on : .off
+
+        // Update menu item based on UpdateManager state
+        if let updateItem = menu.item(withTag: 20) {
+            switch UpdateManager.shared.state {
+            case .idle:
+                updateItem.title = "Kiểm tra cập nhật"
+                updateItem.isEnabled = true
+            case .checking:
+                updateItem.title = "⏳ Đang kiểm tra..."
+                updateItem.isEnabled = false
+            case .available(let info):
+                updateItem.title = "⬇️ Cập nhật v\(info.version)"
+                updateItem.isEnabled = true
+            case .downloading(let progress):
+                updateItem.title = "⏳ Đang tải... \(Int(progress * 100))%"
+                updateItem.isEnabled = false
+            case .installing:
+                updateItem.title = "🔄 Đang cài đặt..."
+                updateItem.isEnabled = false
+            case .upToDate:
+                updateItem.title = "✓ Đã mới nhất"
+                updateItem.isEnabled = false
+                // Reset to idle after 3s
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    if case .upToDate = UpdateManager.shared.state {
+                        UpdateManager.shared.state = .idle
+                    }
+                }
+            case .error:
+                updateItem.title = "⚠️ Lỗi - thử lại"
+                updateItem.isEnabled = true
+            }
+        }
     }
 
     @objc private func selectTelex() { appState.setMethod(.telex) }
     @objc private func selectVNI() { appState.setMethod(.vni) }
+
+    @objc private func handleUpdateAction() {
+        switch UpdateManager.shared.state {
+        case .available, .idle, .error, .upToDate:
+            // Show update dialog for all clickable states
+            checkForUpdates()
+        default:
+            // Downloading/installing - do nothing (menu item disabled anyway)
+            break
+        }
+    }
 
     @objc private func showAbout() {
         showSettings()
@@ -191,6 +252,14 @@ class MenuBarController: NSObject, NSWindowDelegate {
         appState.syncShortcutsToEngine()
         appState.syncExcludedAppsToEngine()
         ExcludedAppsManager.shared.start()
+
+        // Reopen settings if coming from update
+        if UserDefaults.standard.bool(forKey: SettingsKey.reopenSettingsAfterUpdate) {
+            UserDefaults.standard.removeObject(forKey: SettingsKey.reopenSettingsAfterUpdate)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.showSettings()
+            }
+        }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             UpdateManager.shared.checkForUpdatesSilently()
@@ -317,6 +386,9 @@ class MenuBarController: NSObject, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.settingsWindow?.makeFirstResponder(nil)
         }
+
+        // Auto-check for updates when opening settings
+        UpdateManager.shared.checkForUpdatesManually()
     }
 
     private func setupMainMenu() {
@@ -390,6 +462,11 @@ class MenuBarController: NSObject, NSWindowDelegate {
     }
 
     @objc private func checkForUpdates() {
+        // Force recreate window if already downloading (sidebar auto-download triggered)
+        if case .downloading = UpdateManager.shared.state {
+            updateWindow = nil
+        }
+
         if updateWindow == nil {
             let controller = NSHostingController(rootView: UpdateView())
             let window = NSWindow(contentViewController: controller)
@@ -403,9 +480,13 @@ class MenuBarController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         updateWindow?.makeKeyAndOrderFront(nil)
 
-        // Skip re-check if update is already available (from auto-check)
-        if case .available = UpdateManager.shared.state { return }
-        UpdateManager.shared.checkForUpdatesManually()
+        // Skip re-check if already in progress
+        switch UpdateManager.shared.state {
+        case .available, .downloading, .installing:
+            return
+        default:
+            UpdateManager.shared.checkForUpdatesManually()
+        }
     }
 
     // MARK: - NSWindowDelegate

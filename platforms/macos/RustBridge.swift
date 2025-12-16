@@ -584,4 +584,5 @@ extension Notification.Name {
     static let showUpdateWindow = Notification.Name("showUpdateWindow")
     static let shortcutChanged = Notification.Name("shortcutChanged")
     static let excludedAppsChanged = Notification.Name("excludedAppsChanged")
+    static let updateStateChanged = Notification.Name("updateStateChanged")
 }

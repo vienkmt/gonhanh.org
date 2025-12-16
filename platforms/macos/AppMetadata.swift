@@ -70,6 +70,7 @@ enum SettingsKey {
     static let hasCompletedOnboarding = "gonhanh.onboarding.completed"
     static let permissionGranted = "gonhanh.permission.granted"
     static let toggleShortcut = "gonhanh.shortcut.toggle"
+    static let reopenSettingsAfterUpdate = "gonhanh.update.reopenSettings"
 }
 
 // MARK: - Keyboard Shortcut Model

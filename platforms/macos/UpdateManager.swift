@@ -18,7 +18,11 @@ enum UpdateState {
 class UpdateManager: NSObject, ObservableObject {
     static let shared = UpdateManager()
 
-    @Published var state: UpdateState = .idle
+    @Published var state: UpdateState = .idle {
+        didSet {
+            NotificationCenter.default.post(name: .updateStateChanged, object: nil)
+        }
+    }
     @Published var lastCheckDate: Date?
 
     private var downloadTask: URLSessionDownloadTask?
@@ -172,6 +176,10 @@ class UpdateManager: NSObject, ObservableObject {
     }
 
     private func relaunchWithNewApp(tempApp: String) {
+        // Save flag to reopen settings after relaunch (force sync before terminate)
+        UserDefaults.standard.set(true, forKey: SettingsKey.reopenSettingsAfterUpdate)
+        UserDefaults.standard.synchronize()
+
         let destApp = "/Applications/GoNhanh.app"
         let script = "sleep 0.5 && rm -rf '\(destApp)' && mv '\(tempApp)' '\(destApp)' && open '\(destApp)'"
 
