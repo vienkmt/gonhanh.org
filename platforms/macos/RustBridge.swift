@@ -207,6 +207,7 @@ private struct ImeResult {
 @_silgen_name("ime_key_ext") private func ime_key_ext(_ key: UInt16, _ caps: Bool, _ ctrl: Bool, _ shift: Bool) -> UnsafeMutablePointer<ImeResult>?
 @_silgen_name("ime_method") private func ime_method(_ method: UInt8)
 @_silgen_name("ime_enabled") private func ime_enabled(_ enabled: Bool)
+@_silgen_name("ime_skip_w_shortcut") private func ime_skip_w_shortcut(_ skip: Bool)
 @_silgen_name("ime_clear") private func ime_clear()
 @_silgen_name("ime_free") private func ime_free(_ result: UnsafeMutablePointer<ImeResult>?)
 
@@ -214,6 +215,9 @@ private struct ImeResult {
 @_silgen_name("ime_add_shortcut") private func ime_add_shortcut(_ trigger: UnsafePointer<CChar>?, _ replacement: UnsafePointer<CChar>?)
 @_silgen_name("ime_remove_shortcut") private func ime_remove_shortcut(_ trigger: UnsafePointer<CChar>?)
 @_silgen_name("ime_clear_shortcuts") private func ime_clear_shortcuts()
+
+// Word Restore FFI
+@_silgen_name("ime_restore_word") private func ime_restore_word(_ word: UnsafePointer<CChar>?)
 
 // MARK: - RustBridge (Public API)
 
@@ -252,7 +256,21 @@ class RustBridge {
         Log.info("Enabled: \(enabled)")
     }
 
+    /// Set whether to skip w→ư shortcut in Telex mode
+    static func setSkipWShortcut(_ skip: Bool) {
+        ime_skip_w_shortcut(skip)
+        Log.info("Skip W shortcut: \(skip)")
+    }
+
     static func clearBuffer() { ime_clear() }
+
+    /// Restore buffer from a Vietnamese word (for backspace-into-word editing)
+    static func restoreWord(_ word: String) {
+        word.withCString { w in
+            ime_restore_word(w)
+        }
+        Log.info("Restored word: \(word)")
+    }
 
     // MARK: - Shortcuts
 
@@ -367,57 +385,148 @@ class KeyboardHookManager {
 // MARK: - Keyboard Callback
 
 private let kEventMarker: Int64 = 0x474E4820  // "GNH "
-private var wasModifierShortcutPressed = false  // Track modifier-only shortcut state for toggle detection
-private var currentShortcut = KeyboardShortcut.load()  // Load saved shortcut
-
-// Observer for shortcut changes
+private let kModifierMask: CGEventFlags = [.maskControl, .maskAlternate, .maskShift, .maskCommand]
+private var wasModifierShortcutPressed = false
+private var currentShortcut = KeyboardShortcut.load()
+private var isRecordingShortcut = false
+private var recordingModifiers: CGEventFlags = []
 private var shortcutObserver: NSObjectProtocol?
 
+// MARK: - Word Restore Support
+
+/// Get word that we're about to backspace into
+/// Returns the word only if cursor is right after a space/punctuation that follows a word
+/// This ensures we only restore when actually entering a word, not when deleting within a word
+private func getWordToRestoreOnBackspace() -> String? {
+    let systemWide = AXUIElementCreateSystemWide()
+    var focused: CFTypeRef?
+
+    guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+          let el = focused else {
+        Log.info("restore: no focused element")
+        return nil
+    }
+
+    let axEl = el as! AXUIElement
+
+    // Get text value
+    var textValue: CFTypeRef?
+    let textResult = AXUIElementCopyAttributeValue(axEl, kAXValueAttribute as CFString, &textValue)
+    guard textResult == .success, let text = textValue as? String, !text.isEmpty else {
+        Log.info("restore: no text value (err=\(textResult.rawValue))")
+        return nil
+    }
+
+    // Get selected text range (cursor position)
+    var rangeValue: CFTypeRef?
+    let rangeResult = AXUIElementCopyAttributeValue(axEl, kAXSelectedTextRangeAttribute as CFString, &rangeValue)
+    guard rangeResult == .success else {
+        Log.info("restore: no range (err=\(rangeResult.rawValue))")
+        return nil
+    }
+
+    // Extract range from AXValue
+    var range = CFRange(location: 0, length: 0)
+    guard AXValueGetValue(rangeValue as! AXValue, .cfRange, &range) else {
+        Log.info("restore: can't extract range")
+        return nil
+    }
+
+    let cursorPos = range.location
+    Log.info("restore: cursor=\(cursorPos) text='\(text.prefix(50))...'")
+    guard cursorPos > 0 else { return nil }
+
+    let textChars = Array(text)
+    guard cursorPos <= textChars.count else {
+        Log.info("restore: cursor out of bounds")
+        return nil
+    }
+    let charBeforeCursor = textChars[cursorPos - 1]
+    Log.info("restore: charBefore='\(charBeforeCursor)'")
+
+    // Only restore if we're about to delete the LAST space/punctuation before a word
+    // i.e., cursor is at: "word |" (about to delete space and enter "word")
+    guard charBeforeCursor.isWhitespace || charBeforeCursor.isPunctuation else {
+        Log.info("restore: not at word boundary")
+        return nil
+    }
+
+    // Check if there's a word before this space (not more spaces)
+    var wordEnd = cursorPos - 1
+
+    // Skip all trailing spaces/punctuation to find the word
+    while wordEnd > 0 && (textChars[wordEnd - 1].isWhitespace || textChars[wordEnd - 1].isPunctuation) {
+        wordEnd -= 1
+    }
+
+    guard wordEnd > 0 else {
+        Log.info("restore: no word before spaces")
+        return nil
+    }
+
+    // But we only want to restore when deleting THE LAST space before the word
+    // If there are more spaces between cursor and word, don't restore yet
+    if wordEnd < cursorPos - 1 {
+        Log.info("restore: multiple spaces before word")
+        return nil  // More than one space/punct between cursor and word
+    }
+
+    // Find start of word
+    var wordStart = wordEnd
+    while wordStart > 0 && !textChars[wordStart - 1].isWhitespace && !textChars[wordStart - 1].isPunctuation {
+        wordStart -= 1
+    }
+
+    // Extract word
+    let word = String(textChars[wordStart..<wordEnd])
+    guard !word.isEmpty else { return nil }
+
+    // Only return if it looks like Vietnamese (has diacritics or is pure ASCII letters)
+    let hasVietnameseDiacritics = word.contains { c in
+        let scalars = c.unicodeScalars
+        return scalars.first.map { $0.value >= 0x00C0 && $0.value <= 0x1EF9 } ?? false
+    }
+    let isPureASCIILetters = word.allSatisfy { $0.isLetter && $0.isASCII }
+
+    if hasVietnameseDiacritics || isPureASCIILetters {
+        Log.info("restore: found word '\(word)'")
+        return word
+    }
+
+    Log.info("restore: word '\(word)' not Vietnamese")
+    return nil
+}
+
+private extension CGEventFlags {
+    var modifierCount: Int {
+        [contains(.maskControl), contains(.maskAlternate), contains(.maskShift), contains(.maskCommand)].filter { $0 }.count
+    }
+}
+
+// MARK: - Shortcut Recording
+
+func startShortcutRecording() { isRecordingShortcut = true; recordingModifiers = [] }
+func stopShortcutRecording() { isRecordingShortcut = false; recordingModifiers = [] }
+
 func setupShortcutObserver() {
-    shortcutObserver = NotificationCenter.default.addObserver(
-        forName: .shortcutChanged,
-        object: nil,
-        queue: .main
-    ) { _ in
+    shortcutObserver = NotificationCenter.default.addObserver(forName: .shortcutChanged, object: nil, queue: .main) { _ in
         currentShortcut = KeyboardShortcut.load()
         Log.info("Shortcut updated: \(currentShortcut.displayParts.joined())")
     }
 }
 
-/// Check if a key+modifier combination matches the saved toggle shortcut
 private func matchesToggleShortcut(keyCode: UInt16, flags: CGEventFlags) -> Bool {
-    // Skip modifier-only shortcuts here (handled in flagsChanged)
-    guard currentShortcut.keyCode != 0xFFFF else { return false }
-    guard keyCode == currentShortcut.keyCode else { return false }
-
-    let savedFlags = CGEventFlags(rawValue: currentShortcut.modifiers)
-
-    // Check required modifiers are present
-    if savedFlags.contains(.maskControl) && !flags.contains(.maskControl) { return false }
-    if savedFlags.contains(.maskAlternate) && !flags.contains(.maskAlternate) { return false }
-    if savedFlags.contains(.maskShift) && !flags.contains(.maskShift) { return false }
-    if savedFlags.contains(.maskCommand) && !flags.contains(.maskCommand) { return false }
-
-    // Ensure Command is NOT pressed if not required (avoid conflict with system shortcuts)
-    if !savedFlags.contains(.maskCommand) && flags.contains(.maskCommand) { return false }
-
-    return true
+    guard currentShortcut.keyCode != 0xFFFF, keyCode == currentShortcut.keyCode else { return false }
+    let saved = CGEventFlags(rawValue: currentShortcut.modifiers)
+    let required: [CGEventFlags] = [.maskControl, .maskAlternate, .maskShift, .maskCommand]
+    for mod in required where saved.contains(mod) && !flags.contains(mod) { return false }
+    return !(!saved.contains(.maskCommand) && flags.contains(.maskCommand))
 }
 
-/// Check if current modifier flags match a modifier-only shortcut
 private func matchesModifierOnlyShortcut(flags: CGEventFlags) -> Bool {
-    // Only for modifier-only shortcuts (keyCode = 0xFFFF)
     guard currentShortcut.keyCode == 0xFFFF else { return false }
-
-    let savedFlags = CGEventFlags(rawValue: currentShortcut.modifiers)
-
-    // Check exact modifier match
-    let ctrl = savedFlags.contains(.maskControl) == flags.contains(.maskControl)
-    let alt = savedFlags.contains(.maskAlternate) == flags.contains(.maskAlternate)
-    let shift = savedFlags.contains(.maskShift) == flags.contains(.maskShift)
-    let cmd = savedFlags.contains(.maskCommand) == flags.contains(.maskCommand)
-
-    return ctrl && alt && shift && cmd
+    let saved = CGEventFlags(rawValue: currentShortcut.modifiers)
+    return flags.intersection(kModifierMask) == saved.intersection(kModifierMask)
 }
 
 private func keyboardCallback(
@@ -430,6 +539,41 @@ private func keyboardCallback(
     }
 
     let flags = event.flags
+
+    // MARK: Shortcut Recording Mode
+    if isRecordingShortcut {
+        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        let mods = flags.intersection(kModifierMask)
+
+        // ESC cancels
+        if type == .keyDown && keyCode == 0x35 {
+            stopShortcutRecording()
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .shortcutRecordingCancelled, object: nil) }
+            return nil
+        }
+
+        // Modifier changes: track or save modifier-only shortcut on release
+        if type == .flagsChanged {
+            if mods.isEmpty && recordingModifiers.modifierCount >= 2 {
+                let captured = KeyboardShortcut(keyCode: 0xFFFF, modifiers: recordingModifiers.rawValue)
+                stopShortcutRecording()
+                DispatchQueue.main.async { NotificationCenter.default.post(name: .shortcutRecorded, object: captured) }
+            } else {
+                recordingModifiers = mods
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
+        // Key + modifiers: save shortcut (e.g., Ctrl+Shift+N)
+        if type == .keyDown && !mods.isEmpty {
+            let captured = KeyboardShortcut(keyCode: keyCode, modifiers: mods.rawValue)
+            stopShortcutRecording()
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .shortcutRecorded, object: captured) }
+            return nil
+        }
+
+        return Unmanaged.passUnretained(event)
+    }
 
     // Handle modifier-only shortcuts (Ctrl+Shift, Cmd+Option, etc.)
     if type == .flagsChanged {
@@ -464,6 +608,28 @@ private func keyboardCallback(
     let shift = flags.contains(.maskShift)
     let caps = shift || flags.contains(.maskAlphaShift)
     let ctrl = flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate)
+
+    // Backspace handling: try to restore word from screen when backspacing into it
+    // This enables editing marks on previously committed words
+    if keyCode == KeyCode.backspace && !ctrl {
+        // First try Rust engine (handles immediate backspace-after-space)
+        if let (bs, chars) = RustBridge.processKey(keyCode: keyCode, caps: caps, ctrl: ctrl, shift: shift) {
+            let str = String(chars)
+            Log.transform(bs, str)
+            sendReplacement(backspace: bs, chars: chars, proxy: proxy)
+            return nil
+        }
+
+        // Engine returned none - try to restore word from screen
+        // This handles: "chào " + backspace to delete space and enter word
+        if let word = getWordToRestoreOnBackspace() {
+            RustBridge.restoreWord(word)
+            Log.info("Restored word from screen: \(word)")
+        }
+
+        // Pass through backspace to delete the character
+        return Unmanaged.passUnretained(event)
+    }
 
     if let (bs, chars) = RustBridge.processKey(keyCode: keyCode, caps: caps, ctrl: ctrl, shift: shift) {
         let str = String(chars)
@@ -574,8 +740,12 @@ private func detectMethod() -> (InjectionMethod, (UInt32, UInt32, UInt32)) {
     ]
     if browsers.contains(bundleId) && role == "AXTextField" { Log.method("sel:browser"); return (.selection, (0, 0, 0)) }
     if role == "AXTextField" && bundleId.hasPrefix("com.jetbrains") { Log.method("sel:jb"); return (.selection, (0, 0, 0)) }
-    if bundleId == "com.microsoft.Excel" { Log.method("sel:excel"); return (.selection, (0, 0, 0)) }
-    if bundleId == "com.microsoft.Word" { Log.method("sel:word"); return (.selection, (0, 0, 0)) }
+
+    // Microsoft Office apps - use backspace method instead of selection
+    // Selection method conflicts with Office's autocomplete/suggestion features
+    // which can cause the first character to be lost (issue #36)
+    if bundleId == "com.microsoft.Excel" { Log.method("slow:excel"); return (.slow, (3000, 8000, 3000)) }
+    if bundleId == "com.microsoft.Word" { Log.method("slow:word"); return (.slow, (3000, 8000, 3000)) }
 
     // Electron apps - higher delays for reliable text replacement
     if bundleId == "com.todesktop.230313mzl4w4u92" { Log.method("slow:claude"); return (.slow, (8000, 15000, 8000)) }
@@ -665,4 +835,6 @@ extension Notification.Name {
     static let showUpdateWindow = Notification.Name("showUpdateWindow")
     static let shortcutChanged = Notification.Name("shortcutChanged")
     static let updateStateChanged = Notification.Name("updateStateChanged")
+    static let shortcutRecorded = Notification.Name("shortcutRecorded")
+    static let shortcutRecordingCancelled = Notification.Name("shortcutRecordingCancelled")
 }
