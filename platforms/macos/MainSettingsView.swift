@@ -201,9 +201,11 @@ class AppState: ObservableObject {
     private func setupLaunchAtLoginMonitoring() {
         isLaunchAtLoginEnabled = LaunchAtLoginManager.shared.isEnabled
 
-        // Auto-enable launch at login if not already enabled
-        if !isLaunchAtLoginEnabled {
+        // Only auto-enable on first launch (when user hasn't configured yet)
+        let hasConfigured = UserDefaults.standard.bool(forKey: SettingsKey.launchAtLoginConfigured)
+        if !hasConfigured && !isLaunchAtLoginEnabled {
             autoEnableLaunchAtLogin()
+            UserDefaults.standard.set(true, forKey: SettingsKey.launchAtLoginConfigured)
         }
 
         launchAtLoginTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
