@@ -952,14 +952,21 @@ private func keyboardCallback(
     // Enter: submit and trigger auto-capitalize pending state
     // IMPORTANT: Send Enter to engine FIRST to trigger auto-capitalize pending state,
     // then clear buffer. Engine sets pending_capitalize when it sees Enter key.
-    // Also handle auto-restore result (same as ESC handling)
+    // Also handle auto-restore and shortcut results (same as ESC handling)
     if keyCode == 0x24 || keyCode == 0x4C {  // Return (0x24) or Enter/Numpad (0x4C)
         // Detect injection method once per keystroke (expensive AX query)
         let (method, delays) = detectMethod()
 
-        // Process key and handle auto-restore result
+        // Process key and handle auto-restore/shortcut result
         if let (bs, chars, _) = RustBridge.processKey(keyCode: keyCode, caps: caps, ctrl: ctrl, shift: shift) {
             sendReplacement(backspace: bs, chars: chars, method: method, delays: delays, proxy: proxy)
+
+            // If shortcut/restore triggered (has backspace or output), consume Enter key
+            // This prevents extra newline after shortcut replacement
+            if bs > 0 || !chars.isEmpty {
+                TextInjector.shared.clearSessionBuffer()
+                return nil  // Consume Enter key
+            }
         }
 
         TextInjector.shared.clearSessionBuffer()
