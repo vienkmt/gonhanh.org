@@ -1343,15 +1343,21 @@ private func detectMethod() -> (InjectionMethod, (UInt32, UInt32, UInt32)) {
         Log.method("ax:arc"); return cached(.axDirect, (0, 0, 0))
     }
 
-    // Firefox-based browsers - use AX API
+    // Firefox-based browsers - use selection method for address bar (AXTextField)
+    // Use AX API only for content areas (AXWindow) where selection method doesn't work
+    // Note: AX method was causing interference with mouse word selection (Issue #160)
     let firefoxBrowsers = [
         "org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition", "org.mozilla.nightly",
         "org.waterfoxproject.waterfox", "io.gitlab.librewolf-community.librewolf",
         "one.ablaze.floorp", "org.torproject.torbrowser", "net.mullvad.mullvadbrowser",
         "app.zen-browser.zen"
     ]
-    if firefoxBrowsers.contains(bundleId) && (role == "AXTextField" || role == "AXWindow") {
-        Log.method("ax:firefox"); return cached(.axDirect, (0, 0, 0))
+    if firefoxBrowsers.contains(bundleId) {
+        if role == "AXTextField" {
+            Log.method("sel:firefox"); return cached(.selection, (0, 0, 0))  // Address bar
+        } else if role == "AXWindow" {
+            Log.method("ax:firefox"); return cached(.axDirect, (0, 0, 0))  // Content area
+        }
     }
 
     // Browser address bars (AXTextField with autocomplete)
