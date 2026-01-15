@@ -564,10 +564,11 @@ class RustBridge {
         Log.info("Bracket shortcut: \(enabled)")
     }
 
-    /// Set whether ESC key restores raw ASCII input
-    static func setEscRestore(_ enabled: Bool) {
+    /// Set whether restore shortcut is enabled
+    /// NOTE: Enable in Rust engine so we can get restore data, but Swift controls when to trigger
+    static func setRestoreShortcutEnabled(_ enabled: Bool) {
         ime_esc_restore(enabled)
-        Log.info("ESC restore: \(enabled)")
+        Log.info("Restore shortcut enabled: \(enabled)")
     }
 
     /// Set whether to enable free tone placement (skip validation)
@@ -750,7 +751,9 @@ class KeyboardHookManager {
 private let kEventMarker: Int64 = 0x474E4820  // "GNH "
 private let kModifierMask: CGEventFlags = [.maskSecondaryFn, .maskControl, .maskAlternate, .maskShift, .maskCommand]
 private var wasModifierShortcutPressed = false
+private var wasRestoreModifierPressed = false  // Track modifier-only restore shortcut
 private var currentShortcut = KeyboardShortcut.load()
+private var currentRestoreShortcut = KeyboardShortcut.loadRestoreShortcut()
 private var isRecordingShortcut = false
 private var recordingModifiers: CGEventFlags = []      // Current modifiers being held
 private var peakRecordingModifiers: CGEventFlags = []  // Peak modifiers during recording
@@ -883,14 +886,27 @@ private extension CGEventFlags {
 
 // MARK: - Shortcut Recording
 
+private var isRecordingRestoreShortcut = false  // Separate flag for restore shortcut recording
+
 func startShortcutRecording() {
+    guard !isRecordingShortcut else { return }  // Prevent simultaneous recording
     isRecordingShortcut = true
+    isRecordingRestoreShortcut = false
     recordingModifiers = []
     peakRecordingModifiers = []
 }
 
 func stopShortcutRecording() {
     isRecordingShortcut = false
+    isRecordingRestoreShortcut = false
+    recordingModifiers = []
+    peakRecordingModifiers = []
+}
+
+func startRestoreShortcutRecording() {
+    guard !isRecordingShortcut else { return }  // Prevent simultaneous recording
+    isRecordingShortcut = true
+    isRecordingRestoreShortcut = true
     recordingModifiers = []
     peakRecordingModifiers = []
 }
@@ -900,14 +916,41 @@ func setupShortcutObserver() {
         currentShortcut = KeyboardShortcut.load()
         Log.info("Shortcut updated: \(currentShortcut.displayParts.joined())")
     }
+    // Observer for restore shortcut changes
+    NotificationCenter.default.addObserver(forName: .restoreShortcutChanged, object: nil, queue: .main) { _ in
+        currentRestoreShortcut = KeyboardShortcut.loadRestoreShortcut()
+        Log.info("Restore shortcut updated: \(currentRestoreShortcut.displayParts.joined())")
+    }
 }
 
 private func matchesToggleShortcut(keyCode: UInt16, flags: CGEventFlags) -> Bool {
     return currentShortcut.matches(keyCode: keyCode, flags: flags)
 }
 
+private func matchesRestoreShortcut(keyCode: UInt16, flags: CGEventFlags) -> Bool {
+    // Check both key+modifier and modifier-only shortcuts
+    if currentRestoreShortcut.isModifierOnly {
+        return currentRestoreShortcut.matchesModifierOnly(flags: flags)
+    }
+    return currentRestoreShortcut.matches(keyCode: keyCode, flags: flags)
+}
+
 private func matchesModifierOnlyShortcut(flags: CGEventFlags) -> Bool {
     return currentShortcut.matchesModifierOnly(flags: flags)
+}
+
+/// Trigger restore shortcut - restore raw ASCII and clear buffer
+private func triggerRestoreShortcut(flags: CGEventFlags, proxy: CGEventTapProxy) {
+    let shift = flags.contains(.maskShift)
+    let caps = shift || flags.contains(.maskAlphaShift)
+    let ctrl = flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate)
+    let (method, delays) = detectMethod()
+    if let (bs, chars, _) = RustBridge.processKey(keyCode: UInt16(KeyCode.esc), caps: caps, ctrl: ctrl, shift: shift) {
+        Log.info("Restore shortcut: backspace \(bs), chars '\(String(chars))'")
+        sendReplacement(backspace: bs, chars: chars, method: method, delays: delays, proxy: proxy)
+    }
+    TextInjector.shared.clearSessionBuffer()
+    RustBridge.clearBuffer()
 }
 
 private func keyboardCallback(
@@ -934,8 +977,34 @@ private func keyboardCallback(
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let mods = flags.intersection(kModifierMask)
 
-        // ESC cancels
-        if type == .keyDown && keyCode == 0x35 {
+        // For restore shortcut recording: allow any single key (including ESC) or any modifier
+        if isRecordingRestoreShortcut {
+            if type == .keyDown {
+                // Any key press (with or without modifiers)
+                let captured = KeyboardShortcut(keyCode: keyCode, modifiers: mods.rawValue)
+                stopShortcutRecording()
+                DispatchQueue.main.async { NotificationCenter.default.post(name: .shortcutRecorded, object: captured) }
+                return nil
+            }
+            if type == .flagsChanged {
+                // Any modifier(s) released - save if we had modifiers
+                if mods.isEmpty && !peakRecordingModifiers.isEmpty {
+                    let captured = KeyboardShortcut(keyCode: 0xFFFF, modifiers: peakRecordingModifiers.rawValue)
+                    stopShortcutRecording()
+                    DispatchQueue.main.async { NotificationCenter.default.post(name: .shortcutRecorded, object: captured) }
+                } else {
+                    recordingModifiers = mods
+                    if mods.modifierCount > peakRecordingModifiers.modifierCount {
+                        peakRecordingModifiers = mods
+                    }
+                }
+                return Unmanaged.passUnretained(event)
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
+        // ESC cancels (only for toggle shortcut recording)
+        if type == .keyDown && keyCode == KeyCode.esc {
             stopShortcutRecording()
             DispatchQueue.main.async { NotificationCenter.default.post(name: .shortcutRecordingCancelled, object: nil) }
             return nil
@@ -982,6 +1051,16 @@ private func keyboardCallback(
         }
         wasControlPressed = isControlNowPressed
 
+        // Handle modifier-only restore shortcut (e.g., Ctrl alone, Shift alone)
+        if AppState.shared.restoreShortcutEnabled && currentRestoreShortcut.isModifierOnly {
+            if currentRestoreShortcut.matchesModifierOnly(flags: flags) {
+                wasRestoreModifierPressed = true
+            } else if wasRestoreModifierPressed {
+                wasRestoreModifierPressed = false
+                triggerRestoreShortcut(flags: flags, proxy: proxy)
+            }
+        }
+
         if matchesModifierOnlyShortcut(flags: flags) {
             wasModifierShortcutPressed = true
         } else if wasModifierShortcutPressed {
@@ -996,6 +1075,7 @@ private func keyboardCallback(
 
     // Reset modifier state if any key is pressed while modifiers are held
     wasModifierShortcutPressed = false
+    wasRestoreModifierPressed = false
 
     if event.getIntegerValueField(.eventSourceUserData) == kEventMarker {
         return Unmanaged.passUnretained(event)
@@ -1035,21 +1115,10 @@ private func keyboardCallback(
         TextInjector.shared.clearSessionBuffer()
         return Unmanaged.passUnretained(event)
     }
-    // Issue #149: ESC key - restore raw ASCII if enabled, then clear buffer
-    // Must call engine FIRST to get restore result before clearing
-    if keyCode == 0x35 {  // Escape
-        // Detect injection method once per keystroke (expensive AX query)
-        let (method, delays) = detectMethod()
-
-        // Try to get restore result from engine
-        if let (bs, chars, _) = RustBridge.processKey(keyCode: keyCode, caps: caps, ctrl: ctrl, shift: shift) {
-            Log.info("ESC restore: backspace \(bs), chars '\(String(chars))'")
-            sendReplacement(backspace: bs, chars: chars, method: method, delays: delays, proxy: proxy)
-        }
-
-        TextInjector.shared.clearSessionBuffer()
-        RustBridge.clearBuffer()
-        return Unmanaged.passUnretained(event)
+    // Issue #149: Restore shortcut - restore raw ASCII if enabled
+    if AppState.shared.restoreShortcutEnabled && matchesRestoreShortcut(keyCode: keyCode, flags: flags) {
+        triggerRestoreShortcut(flags: flags, proxy: proxy)
+        return nil  // Consume the event so it doesn't propagate
     }
 
     // Detect injection method once per keystroke (expensive AX query)
@@ -1157,6 +1226,16 @@ private func keyboardCallback(
     let isLetterKey = keyCode <= 0x32 && keyCode != KeyCode.backspace  // Rough check for letter keys
     if isLetterKey {
         skipWordRestoreAfterClick = false
+    }
+
+    // Block ESC from reaching Rust if restoreShortcutEnabled is enabled but shortcut is NOT ESC
+    // This prevents Rust from auto-restoring when user configured a different shortcut
+    if keyCode == KeyCode.esc && AppState.shared.restoreShortcutEnabled {
+        let isEscShortcut = currentRestoreShortcut.keyCode == KeyCode.esc && currentRestoreShortcut.modifiers == 0
+        if !isEscShortcut {
+            // ESC pressed but shortcut is not ESC - just pass through without restore
+            return Unmanaged.passUnretained(event)
+        }
     }
 
     if let (bs, chars, keyConsumed) = RustBridge.processKey(keyCode: keyCode, caps: caps, ctrl: ctrl, shift: shift) {
@@ -1514,6 +1593,7 @@ extension Notification.Name {
     static let toggleVietnamese = Notification.Name("toggleVietnamese")
     static let showUpdateWindow = Notification.Name("showUpdateWindow")
     static let shortcutChanged = Notification.Name("shortcutChanged")
+    static let restoreShortcutChanged = Notification.Name("restoreShortcutChanged")
     static let updateStateChanged = Notification.Name("updateStateChanged")
     static let shortcutRecorded = Notification.Name("shortcutRecorded")
     static let shortcutRecordingCancelled = Notification.Name("shortcutRecordingCancelled")
