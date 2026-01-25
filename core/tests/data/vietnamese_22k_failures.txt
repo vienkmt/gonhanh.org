@@ -1,6 +1,6 @@
 # Vietnamese 22k Typing Variants Failures
 # Format: WORD \t VARIANT \t EXPECTED \t ACTUAL
-# Total failures: 262
+# Total failures: 264
 
 giấc	giacsa	giấc	giáca
 giấc	giasac	giấc	giáac
@@ -56,9 +56,9 @@ giấm	giasam	giấm	giáam
 quấy	quayas	quấy	quayas
 giấm	giasam	giấm	giáam
 giâm	giama	giâm	giama
-giấy	giaysa	giấy	giáya
 giận	giajan	giận	giạan
 giận	gianja	giận	giạna
+giấu	giausa	giấu	giáua
 ấm	amsa	ấm	áma
 quẩy	quayar	quẩy	quayar
 giấy	giaysa	giấy	giáya
@@ -141,9 +141,13 @@ giật	giajat	giật	giạat
 giật	giajat	giật	giạat
 giật	giajat	giật	giạat
 giật	giajat	giật	giạat
-giầu	giaufa	giầu	giàua
 giấu	giausa	giấu	giáua
-giấu	giausa	giấu	giáua
+giấy	giaysa	giấy	giáya
+giấy	giaysa	giấy	giáya
+giấy	giaysa	giấy	giáya
+giấy	giaysa	giấy	giáya
+giấy	giaysa	giấy	giáya
+giấy	giaysa	giấy	giáya
 giấy	giaysa	giấy	giáya
 giấy	giaysa	giấy	giáya
 giấy	giaysa	giấy	giáya
@@ -239,7 +243,6 @@ quấy	quayas	quấy	quayas
 quấy	quayas	quấy	quayas
 quậy	quayaj	quậy	quayaj
 quều	queuef	quều	queuef
-giậu	giauja	giậu	giạua
 giấm	giasam	giấm	giáam
 rượu	ruoujw	rượu	ruoujw
 rượu	ruoujw	rượu	ruoujw
@@ -254,7 +257,6 @@ rượu	ruoujw	rượu	ruoujw
 uất	uatsa	uất	uáta
 rượu	ruoujw	rượu	ruoujw
 ẩm	amra	ẩm	ảma
-giấy	giaysa	giấy	giáya
 ấp	apsa	ấp	ápa
 giấc	giacsa	giấc	giáca
 giấc	giasac	giấc	giáac
