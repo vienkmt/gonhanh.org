@@ -784,6 +784,22 @@ fn ethnic_minority_place_names_not_restored() {
 }
 
 // =============================================================================
+// ENGLISH WORDS WITH K FINAL - SHOULD AUTO-RESTORE
+// Words like "cowork", "network", "worker" have circumflex vowel + K which is
+// NOT valid Vietnamese. Only breve vowel (ă) + K is valid (ethnic minority).
+// =============================================================================
+
+#[test]
+fn english_words_with_k_final_restored() {
+    telex_auto_restore(&[
+        ("cowork ", "cowork "),     // cowork - NOT valid VN (ổ + k = circumflex + K)
+        ("network ", "network "),   // network - should restore
+        ("worker ", "worker "),     // worker - should restore
+        ("homework ", "homework "), // homework - should restore
+    ]);
+}
+
+// =============================================================================
 // ISSUE #26 / #142 - UNFIXED BUGS (TEST CASES FOR PENDING FIXES)
 // =============================================================================
 

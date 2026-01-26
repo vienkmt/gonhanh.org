@@ -5135,6 +5135,24 @@ impl Engine {
             return true; // ươu at word start without initial is invalid
         }
 
+        // Check 8: K final + CIRCUMFLEX vowel = INVALID Vietnamese
+        // K final is only valid in ethnic minority words with:
+        // - Breve vowels (ă): Đắk, Lắk
+        // - Plain vowels with tone: Búk
+        // K final is NOT valid with circumflex (ô, ê, â): cổk, têk, âk are invalid
+        // This catches English words like "cowork" → "cổk", "network" → "netwổk"
+        if !syllable.final_c.is_empty() {
+            let final_key = buffer_keys[syllable.final_c[0]];
+            if final_key == keys::K {
+                // Check if vowel has circumflex - if so, invalid
+                for &i in &syllable.vowel {
+                    if buffer_tones[i] == tone::CIRCUMFLEX {
+                        return true; // circumflex + K final is invalid Vietnamese
+                    }
+                }
+            }
+        }
+
         false
     }
 
